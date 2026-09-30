@@ -8,7 +8,7 @@ if not os.path.exists("data"):
     os.mkdir("data")
 
 end_date = datetime.date.today()
-start_date = end_date - datetime.timedelta(days= 365 * 10) # trying to download 5 years of data
+start_date = end_date - datetime.timedelta(days= 365 * 30) # trying to download 5 years of data
 
 for ticker in STOCK_LIST:
     df = yfinance.download(ticker, start_date, end_date, multi_level_index=False)
