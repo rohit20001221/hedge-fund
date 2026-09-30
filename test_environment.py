@@ -2,7 +2,6 @@ from environment import TradingEnvironment, sample_window_idx
 
 from constants.stocks import STOCK_LIST
 import json
-import datetime
 
 config = json.load(open("data/meta.json"))
 
