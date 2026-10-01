@@ -1,6 +1,0 @@
-STOCK_LIST = [
-    "NIFTYBEES.NS",
-    "GOLDBEES.NS",
-    "JUNIORBEES.NS",
-    "LIQUIDBEES.NS"
-]
