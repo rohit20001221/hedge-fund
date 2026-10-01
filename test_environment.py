@@ -1,21 +1,33 @@
-from environment import TradingEnvironment, sample_window_idx
-
+import time
+import pandas as pd
+from environment import StockPortfolioEnv
 from constants.stocks import STOCK_LIST
-import json
 
-config = json.load(open("data/meta.json"))
+stocks = dict()
+for stock in STOCK_LIST:
+    path = f"data/{stock}.csv"
 
-sample = sample_window_idx(
-    config["start_date"],
-    config["end_date"],
-    window_size=360
+    df = pd.read_csv(path, parse_dates=['Date'])
+    stocks[stock] = df
+
+# Initialize environment with render_mode="human"
+env = StockPortfolioEnv(
+    stocks=stocks,
+    initial_capital=100000,
+    step_size=30,
+    window_size=365,
+    max_drawdown_limit=0.15,
+    render_mode="human",
 )
 
-start_date = sample["start_date"]
-end_date = sample["end_date"]
+for _ in range(10):
+    obs, info = env.reset()
+    terminated = False
 
-env = TradingEnvironment(
-    historical_data_paths=STOCK_LIST,
-    start_date=start_date,
-    end_date=end_date
-)
+    while not terminated:
+        action = env.action_space.sample()  # Random allocation step
+        obs, reward, terminated, truncated, info = env.step(action)
+
+        time.sleep(1)  # Slow down execution slightly for visual inspection
+
+env.close()
