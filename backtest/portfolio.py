@@ -24,6 +24,15 @@ UP TO AND INCLUDING that date and asks for target weights:
             ...                               # (also "Open", "High", "Low", "Volume")
             return pd.Series({...})           # ticker -> weight (cash = 1 - sum)
 
+After each executed rebalance the engine calls `strategy.on_rebalance(stats)`
+(override it; default is a no-op). `stats` is a RebalanceStats with the date,
+equity, drawdown, weights before/after, turnover, cost and performance
+metrics since inception:
+
+        def on_rebalance(self, stats):
+            print(stats.date.date(), f"equity={stats.equity:,.0f}",
+                  f"dd={stats.drawdown:.1%}", f"sharpe={stats.metrics['Sharpe']:.2f}")
+
 Because the strategy only ever sees data up to date t, it cannot look ahead.
 Weights chosen at the close of day t earn the returns from day t+1 onward.
 Between rebalances the portfolio drifts with prices (buy-and-hold).
@@ -76,11 +85,28 @@ def load_data(
     return df.ffill()  # fill gaps (holidays); leading NaNs (pre-listing) stay NaN
 
 
+@dataclass
+class RebalanceStats:
+    """Snapshot handed to `Strategy.on_rebalance` right after a rebalance trade."""
+
+    date: pd.Timestamp
+    index: int                  # bar number of this date in the data
+    rebalance_number: int       # 1 for the first allocation, 2 for the next, ...
+    equity: float               # portfolio value after costs
+    drawdown: float             # current drawdown from the equity peak (<= 0)
+    weights_before: pd.Series   # weights just before trading (after price drift)
+    weights_after: pd.Series    # new target weights
+    turnover: float             # one-way turnover of this rebalance
+    cost: float                 # trading cost in currency
+    metrics: dict               # performance since inception, up to this date
+                                # (same keys as PortfolioResult.metrics' core stats)
+
+
 # --------------------------------------------------------------------------- #
 # Strategies
 # --------------------------------------------------------------------------- #
 class Strategy:
-    """Subclass and implement `allocate`."""
+    """Subclass and implement `allocate`; optionally override `on_rebalance`."""
 
     name = "Strategy"
     min_history = 1  # number of bars required before the first allocation
@@ -92,6 +118,15 @@ class Strategy:
         Assets that hadn't listed yet contain NaN - handle with .dropna().
         """
         raise NotImplementedError
+
+    def on_rebalance(self, stats: RebalanceStats) -> None:
+        """Called after every executed rebalance with summary stats. Default: no-op.
+
+        Override to log, record state, or adapt parameters for later rebalances
+        (e.g. de-risk after a deep drawdown). It is informational: the trade has
+        already happened, and `allocate` is the only place weights are chosen.
+        """
+        return None
 
 
 class EqualWeight(Strategy):
@@ -163,7 +198,7 @@ class Momentum(Strategy):
 # --------------------------------------------------------------------------- #
 def compute_metrics(returns: pd.Series, equity: pd.Series, ppy: float, rf: float = 0.0) -> dict:
     years = len(returns) / ppy
-    total = equity.iloc[-1] / equity.iloc[0] - 1
+    total = (1 + returns).prod() - 1
     cagr = (1 + total) ** (1 / years) - 1 if years > 0 and total > -1 else np.nan
     std = returns.std()
     vol = std * np.sqrt(ppy)
@@ -328,8 +363,8 @@ class PortfolioBacktester:
 
         rets = rets.iloc[start:].copy()
         b_rets = b_rets.iloc[start:].copy()
-        rets.iloc[0] = 0.0
-        b_rets.iloc[0] = 0.0
+        # Strategy's first bar holds nothing yet, so its return is just the entry cost.
+        b_rets.iloc[0] = 0.0   # benchmark starts at the same point, with no gain on day one
 
         equity = self.initial_capital * (1 + rets).cumprod()
         b_equity = self.initial_capital * (1 + b_rets).cumprod()
@@ -365,29 +400,64 @@ class PortfolioBacktester:
         port = np.zeros(n)
         turn = np.zeros(n)
         W = np.zeros((n, m))
+        E = np.full(n, self.initial_capital, dtype=float)   # running equity
+        equity = self.initial_capital
         started = False
+        start_i = 0
+        n_reb = 0
+        idx = close.index
+        # Only pay for the stats snapshot if the strategy actually overrides the hook.
+        wants_cb = type(strategy).on_rebalance is not Strategy.on_rebalance
 
         for i in range(n):
             gross = float(w @ rets_arr[i])
             if 1.0 + gross > 0:
                 w = w * (1.0 + rets_arr[i]) / (1.0 + gross)   # drift
             r = gross
+            equity_pre_cost = equity * (1.0 + gross)
+            w_before = w.copy()
+            traded = False
 
             if i >= min_h - 1 and (mask[i] or not started):
                 target = self._clean(strategy.allocate(data.iloc[: i + 1]), tickers, avail[i])
                 if target is not None:
                     t = float(np.abs(target - w).sum())
-                    r -= t * cost_rate
+                    cost_frac = t * cost_rate
+                    r -= cost_frac
                     turn[i] = t / 2.0                          # one-way turnover
                     w = target
+                    if not started:
+                        start_i = i
                     started = True
+                    traded = True
+                    n_reb += 1
 
             port[i] = r
+            equity *= (1.0 + r)
+            E[i] = equity
             W[i] = w
 
-        idx = close.index
+            if traded and wants_cb:
+                strategy.on_rebalance(self._make_stats(
+                    idx, i, n_reb, start_i, port, E, tickers, w_before, w,
+                    turn[i], cost_frac * equity_pre_cost))
+
         return (pd.Series(port, index=idx), pd.DataFrame(W, index=idx, columns=tickers),
                 pd.Series(turn, index=idx))
+
+    def _make_stats(self, idx, i, n_reb, start_i, port, E, tickers, w_before, w_after,
+                    turnover, cost) -> RebalanceStats:
+        sl = slice(start_i, i + 1)
+        rets = pd.Series(port[sl], index=idx[sl])
+        eq = pd.Series(E[sl], index=idx[sl])
+        metrics = compute_metrics(rets, eq, _infer_periods_per_year(idx[: i + 1]), self.rf)
+        return RebalanceStats(
+            date=idx[i], index=i, rebalance_number=n_reb,
+            equity=float(E[i]), drawdown=float(E[i] / E[: i + 1].max() - 1.0),
+            weights_before=pd.Series(w_before, index=tickers),
+            weights_after=pd.Series(w_after, index=tickers),
+            turnover=float(turnover), cost=float(cost), metrics=metrics,
+        )
 
     def _clean(self, target, tickers, avail_row):
         if target is None:
