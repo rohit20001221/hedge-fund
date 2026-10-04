@@ -208,7 +208,14 @@ class PortfolioResult:
         return pd.DataFrame({self.strategy_name: self.metrics,
                              self.benchmark_name: self.benchmark_metrics})
 
-    def plot(self, show: bool = True):
+    def plot(self, show: bool = True, save_to: str | None = None):
+        """Draw equity / drawdown / weights.
+
+        save_to : path (e.g. "result.png") to write the figure to.
+        If a window can't be opened (non-interactive backend such as Agg),
+        the figure is saved to "backtest.png" instead of just warning.
+        """
+        import matplotlib
         import matplotlib.pyplot as plt
 
         fig, axes = plt.subplots(3, 1, figsize=(11, 9), sharex=True,
@@ -236,7 +243,15 @@ class PortfolioResult:
         axes[2].grid(alpha=0.3)
 
         fig.tight_layout()
-        if show:
+
+        interactive = matplotlib.get_backend().lower() not in {"agg", "pdf", "svg", "ps", "cairo", "template"}
+        if show and not interactive and not save_to:
+            save_to = "backtest.png"
+            print("No interactive matplotlib backend available; saving chart to backtest.png")
+        if save_to:
+            fig.savefig(save_to, dpi=150, bbox_inches="tight")
+            print(f"Saved chart to {save_to}")
+        if show and interactive:
             plt.show()
         return fig
 
