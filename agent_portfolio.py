@@ -8,7 +8,7 @@ import torch
 tickers = ["NIFTYBEES.NS", "JUNIORBEES.NS", "GOLDBEES.NS", "FREE:CASH"]
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")   
 
-model = PortfolioAgent(num_stocks=4).to(device)
+model = PortfolioAgent(num_stocks=len(tickers)).to(device)
 
 actorOptimizer = torch.optim.Adam(model.actor.parameters())
 criticOptimizer = torch.optim.Adam(model.critic.parameters())
