@@ -22,7 +22,7 @@ class AgentStrategy(Strategy):
         prices = history["Close"].tail(30)
         x = prepare_data(prices, self.num_stocks, self.min_history, self.weights)
         
-        weights = self.model.actor(x)
+        weights, value = self.model(x)
         self.weights = flatten(weights)
 
         return pd.Series({

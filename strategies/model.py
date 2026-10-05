@@ -53,11 +53,10 @@ class PortfolioAgent(nn.Module):
             nn.Linear(self.hidden_size, self.hidden_size),
             nn.ReLU(),
             nn.Linear(self.hidden_size, 1),
-            nn.Sigmoid()
         )
 
-    def actor(self, x):
-        return self.actor_network(x)
+    def forward(self, x):
+        weights =  self.actor_network(x)
+        value = self.critic_network(x)
 
-    def critic(self, x):
-        return self.critic_network(x)
+        return weights, value
