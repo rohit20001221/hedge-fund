@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import torch
 
-tickers = ["NIFTYBEES.NS", "JUNIORBEES.NS", "FREE:CASH", "GOLDBEES.NS"]
+tickers = ["NIFTYBEES.NS", "JUNIORBEES.NS", "GOLDBEES.NS", "FREE:CASH"]
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")   
 
 class AgentStrategy(Strategy):
@@ -31,8 +31,7 @@ class AgentStrategy(Strategy):
         })
 
     def on_period_end(self, stats, history):
-        print(history.tail(30))
-        print(stats.metrics["Sharpe"])
+        pass
 
 end_date = datetime.today()
 start_date = end_date - timedelta(days=365 * 2)

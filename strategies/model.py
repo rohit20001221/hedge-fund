@@ -15,7 +15,9 @@ def prepare_data(prices: pd.Series, num_stocks, look_back=30, initial_weights=No
     std = np.std(log_returns, axis=0) * np.sqrt(look_back)
 
     if initial_weights is None:
-        initial_weights = np.array([1 / num_stocks for _ in range(num_stocks)])
+        initial_weights = [1 / num_stocks for _ in range(num_stocks)]
+        
+        initial_weights = np.array(initial_weights)
 
     x = np.concatenate([cov_matrix_flatten, mean, std, initial_weights])
     x = torch.tensor(x).to(device, dtype=torch.float32).view(1, -1)
