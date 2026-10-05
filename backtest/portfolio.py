@@ -47,43 +47,87 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+CASH_TICKER = "FREE:CASH"
+CASH_DAILY_RETURN = 0.0003 
 
 # --------------------------------------------------------------------------- #
 # Data
 # --------------------------------------------------------------------------- #
+def _make_cash_frame(
+    index: pd.DatetimeIndex,
+    fields: list[str],
+    daily_return: float,
+    base: float = 100.0,
+) -> pd.DataFrame:
+    """Synthetic risk-free asset in the same (field, ticker) layout."""
+    level = base * (1 + daily_return) ** np.arange(len(index))
+    data = {}
+    for f in fields:
+        data[(f, CASH_TICKER)] = np.zeros(len(index)) if f == "Volume" else level
+    out = pd.DataFrame(data, index=index)
+    out.columns = pd.MultiIndex.from_tuples(out.columns)
+    return out
+ 
+ 
 def load_data(
     tickers: list[str] | str,
     start: str | None = None,
     end: str | None = None,
     interval: str = "1d",
+    cash_daily_return: float = CASH_DAILY_RETURN,
 ) -> pd.DataFrame:
     """Download adjusted OHLCV for a basket.
-
+ 
     Returns a DataFrame with MultiIndex columns (field, ticker), so
     ``data["Close"]`` is a dates x tickers price table.
+ 
+    The ticker "FREE:CASH" is not downloaded. It is generated as a synthetic
+    risk-free asset compounding at ``cash_daily_return`` per row (default
+    0.03%), on the same dates as the other tickers.
     """
     import yfinance as yf
-
+ 
     if isinstance(tickers, str):
         tickers = [tickers]
-    df = yf.download(
-        tickers, start=start, end=end, interval=interval,
-        auto_adjust=True, progress=False, group_by="column",
-    )
-    if df is None or df.empty:
-        raise ValueError(f"No data returned for {tickers}")
-    if not isinstance(df.columns, pd.MultiIndex):  # single-ticker download
-        df.columns = pd.MultiIndex.from_product([df.columns, tickers])
-
-    close = df["Close"]
-    dead = [t for t in close.columns if close[t].isna().all()]
-    if dead:
-        warnings.warn(f"No data for: {dead} (dropped)")
-        df = df.drop(columns=dead, level=1)
-
-    df = df.loc[df["Close"].notna().any(axis=1)]
-    return df.ffill()  # fill gaps (holidays); leading NaNs (pre-listing) stay NaN
-
+ 
+    want_cash = CASH_TICKER in tickers
+    real = [t for t in tickers if t != CASH_TICKER]
+ 
+    if real:
+        df = yf.download(
+            real, start=start, end=end, interval=interval,
+            auto_adjust=True, progress=False, group_by="column",
+        )
+        if df is None or df.empty:
+            raise ValueError(f"No data returned for {real}")
+        if not isinstance(df.columns, pd.MultiIndex):  # single-ticker download
+            df.columns = pd.MultiIndex.from_product([df.columns, real])
+ 
+        close = df["Close"]
+        dead = [t for t in close.columns if close[t].isna().all()]
+        if dead:
+            warnings.warn(f"No data for: {dead} (dropped)")
+            df = df.drop(columns=dead, level=1)
+ 
+        df = df.loc[df["Close"].notna().any(axis=1)]
+        df = df.ffill()  # fill gaps (holidays); leading NaNs (pre-listing) stay NaN
+        fields = list(df.columns.get_level_values(0).unique())
+    else:
+        # cash-only basket: no market calendar to align to
+        if start is None or end is None:
+            raise ValueError("start and end are required when only FREE:CASH is requested")
+        df = None
+        fields = ["Open", "High", "Low", "Close", "Volume"]
+ 
+    if want_cash:
+        index = df.index if df is not None else pd.bdate_range(start, end)
+        cash = _make_cash_frame(index, fields, cash_daily_return)
+        df = cash if df is None else pd.concat([df, cash], axis=1)
+ 
+    # restore requested ticker order (minus any dropped dead tickers)
+    kept = [t for t in tickers if t in df.columns.get_level_values(1)]
+    cols = pd.MultiIndex.from_product([fields, kept])
+    return df.reindex(columns=cols)
 
 @dataclass
 class RebalanceStats:
