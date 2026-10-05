@@ -10,25 +10,28 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class AgentStrategy(Strategy):
     min_history = 30
 
-    def __init__(self):
+    def __init__(self, num_stocks):
         super().__init__()
 
+        self.num_stocks = num_stocks
+        self.count = 0
         self.weights = None
         self.model = PortfolioAgent(num_stocks=4).to(device)
 
     def allocate(self, history):
         prices = history["Close"].tail(30)
-        x = prepare_data(prices, self.min_history, self.weights)
+        x = prepare_data(prices, self.num_stocks, self.min_history, self.weights)
         
         weights, value  = self.model(x)
         self.weights = flatten(weights)
-        
-        print(self.weights)
 
         return pd.Series({
             ticker: weight
             for ticker, weight in zip(tickers, self.weights)
         })
+
+    def on_rebalance(self, stats):
+        print(stats.metrics["Sharpe"])
 
 end_date = datetime.today()
 start_date = end_date - timedelta(days=365 * 2)
@@ -42,7 +45,7 @@ backtester = PortfolioBacktester(
 
 result = backtester.run(
     data,
-    AgentStrategy(),
+    AgentStrategy(num_stocks=len(tickers)),
     benchmark=None
 )
 
