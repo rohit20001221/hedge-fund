@@ -39,7 +39,7 @@ class PortfolioAgent(nn.Module):
 
         self.actor_network = nn.Sequential(
             nn.Linear(self.input_size, self.hidden_size),
-            nn.ReLU(),
+            nn.Sigmoid(),
             nn.Linear(self.hidden_size, self.hidden_size),
             nn.ReLU(),
             nn.Dropout(0.3),
@@ -49,7 +49,7 @@ class PortfolioAgent(nn.Module):
 
         self.critic_network = nn.Sequential(
             nn.Linear(self.input_size, self.hidden_size),
-            nn.ReLU(),
+            nn.Sigmoid(),
             nn.Linear(self.hidden_size, self.hidden_size),
             nn.ReLU(),
             nn.Linear(self.hidden_size, 1),
