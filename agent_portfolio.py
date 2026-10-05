@@ -22,7 +22,7 @@ class AgentStrategy(Strategy):
         prices = history["Close"].tail(30)
         x = prepare_data(prices, self.num_stocks, self.min_history, self.weights)
         
-        weights, value  = self.model(x)
+        weights = self.model.actor(x)
         self.weights = flatten(weights)
 
         return pd.Series({
@@ -30,7 +30,8 @@ class AgentStrategy(Strategy):
             for ticker, weight in zip(tickers, self.weights)
         })
 
-    def on_rebalance(self, stats):
+    def on_period_end(self, stats, history):
+        print(history.tail(30))
         print(stats.metrics["Sharpe"])
 
 end_date = datetime.today()

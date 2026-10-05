@@ -33,6 +33,13 @@ metrics since inception:
             print(stats.date.date(), f"equity={stats.equity:,.0f}",
                   f"dd={stats.drawdown:.1%}", f"sharpe={stats.metrics['Sharpe']:.2f}")
 
+`strategy.on_period_end(stats, history)` reports the OTHER direction: how the
+previous allocation performed. It fires on each rebalance date after the first,
+once prices have moved and before the new allocation is chosen. `history` is the
+same data slice `allocate` is about to receive. Order on a rebalance date:
+
+    prices applied -> on_period_end(PeriodStats, history) -> allocate() -> trade -> on_rebalance(RebalanceStats)
+
 Because the strategy only ever sees data up to date t, it cannot look ahead.
 Weights chosen at the close of day t earn the returns from day t+1 onward.
 Between rebalances the portfolio drifts with prices (buy-and-hold).
@@ -47,8 +54,9 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+
 CASH_TICKER = "FREE:CASH"
-CASH_DAILY_RETURN = 0.0003 
+CASH_DAILY_RETURN = 0.0003
 
 # --------------------------------------------------------------------------- #
 # Data
@@ -67,8 +75,8 @@ def _make_cash_frame(
     out = pd.DataFrame(data, index=index)
     out.columns = pd.MultiIndex.from_tuples(out.columns)
     return out
- 
- 
+
+
 def load_data(
     tickers: list[str] | str,
     start: str | None = None,
@@ -77,22 +85,22 @@ def load_data(
     cash_daily_return: float = CASH_DAILY_RETURN,
 ) -> pd.DataFrame:
     """Download adjusted OHLCV for a basket.
- 
+
     Returns a DataFrame with MultiIndex columns (field, ticker), so
     ``data["Close"]`` is a dates x tickers price table.
- 
+
     The ticker "FREE:CASH" is not downloaded. It is generated as a synthetic
     risk-free asset compounding at ``cash_daily_return`` per row (default
     0.03%), on the same dates as the other tickers.
     """
     import yfinance as yf
- 
+
     if isinstance(tickers, str):
         tickers = [tickers]
- 
+
     want_cash = CASH_TICKER in tickers
     real = [t for t in tickers if t != CASH_TICKER]
- 
+
     if real:
         df = yf.download(
             real, start=start, end=end, interval=interval,
@@ -102,13 +110,13 @@ def load_data(
             raise ValueError(f"No data returned for {real}")
         if not isinstance(df.columns, pd.MultiIndex):  # single-ticker download
             df.columns = pd.MultiIndex.from_product([df.columns, real])
- 
+
         close = df["Close"]
         dead = [t for t in close.columns if close[t].isna().all()]
         if dead:
             warnings.warn(f"No data for: {dead} (dropped)")
             df = df.drop(columns=dead, level=1)
- 
+
         df = df.loc[df["Close"].notna().any(axis=1)]
         df = df.ffill()  # fill gaps (holidays); leading NaNs (pre-listing) stay NaN
         fields = list(df.columns.get_level_values(0).unique())
@@ -118,16 +126,17 @@ def load_data(
             raise ValueError("start and end are required when only FREE:CASH is requested")
         df = None
         fields = ["Open", "High", "Low", "Close", "Volume"]
- 
+
     if want_cash:
         index = df.index if df is not None else pd.bdate_range(start, end)
         cash = _make_cash_frame(index, fields, cash_daily_return)
         df = cash if df is None else pd.concat([df, cash], axis=1)
- 
+
     # restore requested ticker order (minus any dropped dead tickers)
     kept = [t for t in tickers if t in df.columns.get_level_values(1)]
     cols = pd.MultiIndex.from_product([fields, kept])
     return df.reindex(columns=cols)
+
 
 @dataclass
 class RebalanceStats:
@@ -146,11 +155,33 @@ class RebalanceStats:
                                 # (same keys as PortfolioResult.metrics' core stats)
 
 
+@dataclass
+class PeriodStats:
+    """How the PREVIOUS allocation fared. Handed to `Strategy.on_period_end`
+    on the next rebalance date, after prices have moved and before the new
+    allocation is chosen."""
+
+    date: pd.Timestamp           # end of the holding period (today)
+    start_date: pd.Timestamp     # when the period began (previous rebalance)
+    bars: int                    # number of bars in the period
+    rebalance_number: int        # which rebalance's holding period just ended
+    period_return: float         # portfolio return over the period (after drift, before today's trade)
+    period_max_drawdown: float   # worst peak-to-trough inside the period
+    equity: float                # portfolio value now, before today's trade
+    drawdown: float              # current drawdown from the equity peak (<= 0)
+    weights_start: pd.Series     # weights right after the previous rebalance
+    weights_end: pd.Series       # weights now (drifted with prices)
+    asset_returns: pd.Series     # each asset's price return over the period
+    contributions: pd.Series     # weights_start * asset_returns; sums to period_return
+    metrics: dict                # performance since inception, up to today (pre-trade)
+
+
 # --------------------------------------------------------------------------- #
 # Strategies
 # --------------------------------------------------------------------------- #
 class Strategy:
-    """Subclass and implement `allocate`; optionally override `on_rebalance`."""
+    """Subclass and implement `allocate`; optionally override `on_rebalance`
+    and `on_period_end`."""
 
     name = "Strategy"
     min_history = 1  # number of bars required before the first allocation
@@ -169,6 +200,18 @@ class Strategy:
         Override to log, record state, or adapt parameters for later rebalances
         (e.g. de-risk after a deep drawdown). It is informational: the trade has
         already happened, and `allocate` is the only place weights are chosen.
+        """
+        return None
+
+    def on_period_end(self, stats: PeriodStats, history: pd.DataFrame) -> None:
+        """Called when a holding period ends, i.e. on each rebalance date AFTER
+        the first one, once prices have moved and BEFORE `allocate` runs.
+
+        `stats` describes how the previous allocation performed (period return,
+        per-asset contributions, drawdown, ...). `history` is the basket's data
+        up to and including today (MultiIndex columns: field, ticker), exactly
+        what `allocate` is about to receive. Default: no-op. Use it to record
+        results or adapt state that `allocate` will read a moment later.
         """
         return None
 
@@ -452,6 +495,9 @@ class PortfolioBacktester:
         idx = close.index
         # Only pay for the stats snapshot if the strategy actually overrides the hook.
         wants_cb = type(strategy).on_rebalance is not Strategy.on_rebalance
+        wants_period_cb = type(strategy).on_period_end is not Strategy.on_period_end
+        close_arr = close.to_numpy()
+        last_i = 0                      # bar of the most recent rebalance
 
         for i in range(n):
             gross = float(w @ rets_arr[i])
@@ -462,7 +508,17 @@ class PortfolioBacktester:
             w_before = w.copy()
             traded = False
 
-            if i >= min_h - 1 and (mask[i] or not started):
+            due = i >= min_h - 1 and (mask[i] or not started)
+
+            # Holding period just ended: report it BEFORE choosing new weights.
+            if due and started and wants_period_cb:
+                strategy.on_period_end(
+                    self._make_period_stats(
+                        idx, close_arr, i, last_i, n_reb, start_i, port, E, W,
+                        tickers, w, equity_pre_cost, gross),
+                    data.iloc[: i + 1])
+
+            if due:
                 target = self._clean(strategy.allocate(data.iloc[: i + 1]), tickers, avail[i])
                 if target is not None:
                     t = float(np.abs(target - w).sum())
@@ -475,6 +531,7 @@ class PortfolioBacktester:
                     started = True
                     traded = True
                     n_reb += 1
+                    last_i = i
 
             port[i] = r
             equity *= (1.0 + r)
@@ -488,6 +545,35 @@ class PortfolioBacktester:
 
         return (pd.Series(port, index=idx), pd.DataFrame(W, index=idx, columns=tickers),
                 pd.Series(turn, index=idx))
+
+    def _make_period_stats(self, idx, close_arr, i, last_i, n_reb, start_i, port, E, W,
+                           tickers, w_end, equity_pre, gross) -> PeriodStats:
+        w_start = W[last_i]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            asset_ret = close_arr[i] / close_arr[last_i] - 1.0
+        contrib = w_start * np.nan_to_num(asset_ret)
+
+        # equity path inside the period: bars last_i..i-1 are stored, bar i is pre-trade
+        path = np.append(E[last_i:i], equity_pre)
+        period_dd = float((path / np.maximum.accumulate(path) - 1.0).min())
+
+        # performance since inception through today (pre-trade); port[i]/E[i] not yet written
+        rets = pd.Series(np.append(port[start_i:i], gross), index=idx[start_i: i + 1])
+        eq = pd.Series(np.append(E[start_i:i], equity_pre), index=idx[start_i: i + 1])
+        metrics = compute_metrics(rets, eq, _infer_periods_per_year(idx[: i + 1]), self.rf)
+
+        return PeriodStats(
+            date=idx[i], start_date=idx[last_i], bars=i - last_i, rebalance_number=n_reb,
+            period_return=float(equity_pre / E[last_i] - 1.0),
+            period_max_drawdown=period_dd,
+            equity=float(equity_pre),
+            drawdown=float(equity_pre / max(E[:i].max(), equity_pre) - 1.0),
+            weights_start=pd.Series(w_start, index=tickers),
+            weights_end=pd.Series(w_end, index=tickers),
+            asset_returns=pd.Series(asset_ret, index=tickers),
+            contributions=pd.Series(contrib, index=tickers),
+            metrics=metrics,
+        )
 
     def _make_stats(self, idx, i, n_reb, start_i, port, E, tickers, w_before, w_after,
                     turnover, cost) -> RebalanceStats:

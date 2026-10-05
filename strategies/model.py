@@ -54,8 +54,8 @@ class PortfolioAgent(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, x):
-        weights = self.actor_network(x)
-        value = self.critic_network(x)
+    def actor(self, x):
+        return self.actor_network(x)
 
-        return weights, value
+    def critic(self, x):
+        return self.critic_network(x)
