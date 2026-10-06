@@ -64,11 +64,11 @@ class AgentStrategy(Strategy):
         
         self.log_probs.append(log_prob)
         self.values.append(self.value)
-        self.rewards.append(torch.tensor(stats.metrics["Sharpe"], dtype=torch.float32, device=device))
+        self.rewards.append(torch.tensor(stats.metrics["Calmar"], dtype=torch.float32, device=device))
         self.masks.append(torch.tensor([1], dtype=torch.float, device=device))
 
 end_date = datetime.today()
-start_date = end_date - timedelta(days=365 * 4)
+start_date = end_date - timedelta(days=365 * 2)
 
 data = load_data(tickers, start=start_date, end=end_date, interval="1d")
 backtester = PortfolioBacktester(

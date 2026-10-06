@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>Real-Time GEX</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #111;
+        color: #eee;
+        font-family: Arial, sans-serif;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+      }
+
+      #status {
+        margin-bottom: 20px;
+        color: #aaa;
+      }
+
+      .chart-container {
+        width: 100%;
+        height: 70vh;
+      }
+
+      canvas {
+        background: #181818;
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h1>NIFTY GEX</h1>
+
+    <div id="status">Connecting...</div>
+
+    <div class="chart-container">
+      <canvas id="gexChart"></canvas>
+    </div>
+
+    <script>
+      const status = document.getElementById("status");
+
+      const ctx = document.getElementById("gexChart").getContext("2d");
+
+      const chart = new Chart(ctx, {
+        type: "bar",
+
+        data: {
+          labels: [],
+          datasets: [
+            {
+              label: "GEX",
+              data: [],
+              borderWidth: 1,
+            },
+          ],
+        },
+
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+
+          animation: false,
+
+          scales: {
+            x: {
+              title: {
+                display: true,
+                text: "Strike",
+              },
+
+              ticks: {
+                color: "#aaa",
+              },
+
+              grid: {
+                color: "#333",
+              },
+            },
+
+            y: {
+              title: {
+                display: true,
+                text: "GEX",
+              },
+
+              ticks: {
+                color: "#aaa",
+              },
+
+              grid: {
+                color: "#333",
+              },
+            },
+          },
+
+          plugins: {
+            legend: {
+              labels: {
+                color: "#eee",
+              },
+            },
+          },
+        },
+      });
+
+      function connect() {
+        const ws = new WebSocket("ws://localhost:3206");
+
+        ws.onopen = () => {
+          status.textContent = "🟢 Connected";
+          status.style.color = "#00ff88";
+        };
+
+        ws.onmessage = (event) => {
+          const gex = JSON.parse(event.data);
+
+          /*
+          Python sends:
+
+          {
+            "25000": 1234.5,
+            "25050": -3421.2,
+            "25100": 8231.4,
+            ...
+          }
+        */
+
+          const strikes = Object.keys(gex)
+            .map(Number)
+            .sort((a, b) => a - b);
+
+          const values = strikes.map((strike) => gex[strike]);
+
+          chart.data.labels = strikes;
+
+          chart.data.datasets[0].data = values;
+
+          chart.update();
+        };
+
+        ws.onclose = () => {
+          status.textContent = "🔴 Disconnected — reconnecting...";
+          status.style.color = "#ff4444";
+
+          setTimeout(connect, 1000);
+        };
+
+        ws.onerror = (error) => {
+          console.error("WebSocket error:", error);
+          ws.close();
+        };
+      }
+
+      connect();
+    </script>
+  </body>
+</html>
